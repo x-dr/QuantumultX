@@ -161,12 +161,14 @@ function add(arg1, arg2) {
 function request_history_price(share_url, callback) {
 console.log(share_url)
     const options = {
-        url: "https://apapia-history.manmanbuy.com/ChromeWidgetServices/WidgetServices.ashx",
+        url: "https://tools.tryxd.cn/price",
         headers: {
-            "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+            "Content-Type": "application/json",
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_1_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 - mmbWebBrowse - ios"
         },
-        body: "methodName=getHistoryTrend&p_url=" + encodeURIComponent(share_url)
+        body: JSON.stringify({
+    "url": encodeURIComponent(share_url)
+  })
     }
     $tool.post(options, function (error, response, data) {
         if (!error) {
