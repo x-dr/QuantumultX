@@ -10,8 +10,11 @@
  * - zx_free_travel_version
  * - 请求方法、接口地址、接口路径
  *
- * 数据仅保存在 Quantumult X 本地 $prefs。
- * 脚本不会修改请求，也不会上传任何数据。
+ * 数据处理：
+ * - 保存到 Quantumult X 本地 $prefs
+ * - 将完整会话数据发送到局域网服务
+ *
+ * 脚本不会修改原始请求。
  */
 
 "use strict";
@@ -21,6 +24,15 @@
   var SESSION_KEY = "xj_xiata_session";
   var TOKEN_KEY = "xj_xiata_satoken";
 
+  // 完整会话数据接收地址
+  var UPDATE_URL = "http://192.168.1.35:3636/update";
+
+  // 是否向局域网服务发送完整会话数据
+  var SEND_TO_SERVER = true;
+
+  // 是否在上传失败时发送通知
+  var NOTIFY_ON_SEND_FAILURE = true;
+
   // 是否在 SATOKEN 变化时发送通知
   var NOTIFY_ON_TOKEN_CHANGE = true;
 
@@ -28,7 +40,26 @@
   // 默认关闭，避免额外保存 Cookie、Authorization 等无关敏感信息
   var CAPTURE_ALL_HEADERS = false;
 
-  try {
+  main()
+    .catch(function (error) {
+      var message = getErrorMessage(error);
+
+      console.log(
+        "[" + SCRIPT_NAME + "] 执行失败：" + message
+      );
+
+      $notify(
+        SCRIPT_NAME,
+        "捕获失败",
+        message
+      );
+    })
+    .finally(function () {
+      // 不修改原始请求
+      $done({});
+    });
+
+  async function main() {
     var requestHeaders = $request.headers || {};
     var headers = normalizeHeaders(requestHeaders);
 
@@ -43,11 +74,13 @@
         "[" + SCRIPT_NAME + "] 当前请求未发现 SATOKEN：" +
         ($request.url || "未知接口")
       );
-      $done({});
+
       return;
     }
 
-    var previousToken = $prefs.valueForKey(TOKEN_KEY) || "";
+    var previousToken =
+      $prefs.valueForKey(TOKEN_KEY) || "";
+
     var isFirstCapture = !previousToken;
     var tokenChanged = previousToken !== satoken;
 
@@ -86,20 +119,43 @@
 
     // 单独保存常用字段，方便其他 Quantumult X 脚本读取
     saveValue(TOKEN_KEY, capturedHeaders.satoken);
-    saveValue("xj_xiata_timestamp", capturedHeaders.timestamp);
-    saveValue("xj_xiata_nonce", capturedHeaders.nonce);
-    saveValue("xj_xiata_signature", capturedHeaders.signature);
-    saveValue("xj_xiata_url_header", capturedHeaders.url);
+    saveValue(
+      "xj_xiata_timestamp",
+      capturedHeaders.timestamp
+    );
+    saveValue(
+      "xj_xiata_nonce",
+      capturedHeaders.nonce
+    );
+    saveValue(
+      "xj_xiata_signature",
+      capturedHeaders.signature
+    );
+    saveValue(
+      "xj_xiata_url_header",
+      capturedHeaders.url
+    );
     saveValue(
       "xj_xiata_version",
       capturedHeaders.zx_free_travel_version
     );
-    saveValue("xj_xiata_request_url", session.requestUrl);
-    saveValue("xj_xiata_request_path", session.path);
-    saveValue("xj_xiata_captured_at", session.capturedAt);
+    saveValue(
+      "xj_xiata_request_url",
+      session.requestUrl
+    );
+    saveValue(
+      "xj_xiata_request_path",
+      session.path
+    );
+    saveValue(
+      "xj_xiata_captured_at",
+      session.capturedAt
+    );
 
     if (!sessionSaved) {
-      throw new Error("写入 Quantumult X 本地存储失败");
+      throw new Error(
+        "写入 Quantumult X 本地存储失败"
+      );
     }
 
     console.log(
@@ -125,22 +181,70 @@
         "SATOKEN：" + maskSecret(satoken)
       );
     }
-  } catch (error) {
-    var message = error && error.message
-      ? error.message
-      : String(error);
 
-    console.log("[" + SCRIPT_NAME + "] 执行失败：" + message);
-
-    $notify(
-      SCRIPT_NAME,
-      "捕获失败",
-      message
-    );
+    if (SEND_TO_SERVER) {
+      await sendSessionToServer(session);
+    }
   }
 
-  // 不修改原始请求
-  $done({});
+  /**
+   * 将完整会话数据发送到局域网服务。
+   */
+  async function sendSessionToServer(session) {
+    var requestOptions = {
+      url: UPDATE_URL,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json",
+        "User-Agent": "QuantumultX-Xiata-Capture/1.0"
+      },
+      body: JSON.stringify(session)
+    };
+
+    try {
+      var response = await $task.fetch(requestOptions);
+      var statusCode = Number(
+        response.statusCode || response.status || 0
+      );
+
+      if (
+        statusCode < 200 ||
+        statusCode >= 300
+      ) {
+        throw new Error(
+          "服务器返回 HTTP " + statusCode +
+          formatResponseBody(response.body)
+        );
+      }
+
+      console.log(
+        "[" + SCRIPT_NAME + "] 会话数据发送成功\n" +
+        "地址：" + UPDATE_URL + "\n" +
+        "状态码：" + statusCode + "\n" +
+        "接口：" + session.path
+      );
+    } catch (error) {
+      var message = getErrorMessage(error);
+
+      console.log(
+        "[" + SCRIPT_NAME + "] 会话数据发送失败\n" +
+        "地址：" + UPDATE_URL + "\n" +
+        "错误：" + message
+      );
+
+      if (NOTIFY_ON_SEND_FAILURE) {
+        $notify(
+          SCRIPT_NAME,
+          "会话数据发送失败",
+          "地址：" + UPDATE_URL + "\n" +
+          "错误：" + message
+        );
+      }
+
+      // 上传失败不向上抛出，避免影响原始小程序请求
+    }
+  }
 
   /**
    * 将请求头名称统一转成小写。
@@ -151,8 +255,13 @@
     Object.keys(input || {}).forEach(function (key) {
       var value = input[key];
 
-      if (value !== undefined && value !== null) {
-        output[String(key).toLowerCase()] = String(value);
+      if (
+        value !== undefined &&
+        value !== null
+      ) {
+        output[
+          String(key).toLowerCase()
+        ] = String(value);
       }
     });
 
@@ -164,10 +273,15 @@
    */
   function getHeader(input, names) {
     for (var i = 0; i < names.length; i++) {
-      var name = String(names[i]).toLowerCase();
+      var name = String(
+        names[i]
+      ).toLowerCase();
 
       if (
-        Object.prototype.hasOwnProperty.call(input, name) &&
+        Object.prototype.hasOwnProperty.call(
+          input,
+          name
+        ) &&
         input[name] !== ""
       ) {
         return input[name];
@@ -201,11 +315,26 @@
    * 保存字符串值。
    */
   function saveValue(key, value) {
-    if (value === undefined || value === null) {
+    if (
+      value === undefined ||
+      value === null
+    ) {
       value = "";
     }
 
-    $prefs.setValueForKey(String(value), key);
+    var saved = $prefs.setValueForKey(
+      String(value),
+      key
+    );
+
+    if (!saved) {
+      console.log(
+        "[" + SCRIPT_NAME + "] 字段保存失败：" +
+        key
+      );
+    }
+
+    return saved;
   }
 
   /**
@@ -215,7 +344,10 @@
     value = String(value || "");
 
     if (value.length <= 10) {
-      return value.substring(0, 2) + "****";
+      return (
+        value.substring(0, 2) +
+        "****"
+      );
     }
 
     return (
@@ -226,7 +358,8 @@
   }
 
   /**
-   * 开启 CAPTURE_ALL_HEADERS 时，过滤明显无关的敏感请求头。
+   * 开启 CAPTURE_ALL_HEADERS 时，
+   * 过滤明显无关的敏感请求头。
    */
   function removeUnsafeHeaders(input) {
     var output = {};
@@ -236,25 +369,45 @@
       "proxy-authorization": true
     };
 
-    Object.keys(input || {}).forEach(function (key) {
-      if (!blocked[key]) {
-        output[key] = input[key];
+    Object.keys(input || {}).forEach(
+      function (key) {
+        if (!blocked[key]) {
+          output[key] = input[key];
+        }
       }
-    });
+    );
 
     return output;
   }
+
+  /**
+   * 格式化服务器响应内容。
+   */
+  function formatResponseBody(body) {
+    body = String(body || "").trim();
+
+    if (!body) {
+      return "";
+    }
+
+    if (body.length > 300) {
+      body = body.substring(0, 300) + "...";
+    }
+
+    return "，响应：" + body;
+  }
+
+  /**
+   * 获取错误消息。
+   */
+  function getErrorMessage(error) {
+    if (
+      error &&
+      error.message
+    ) {
+      return error.message;
+    }
+
+    return String(error || "未知错误");
+  }
 })();
-
-
-
-
-
-
-
-
-
-
-
-
-
