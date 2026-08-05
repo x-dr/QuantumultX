@@ -25,7 +25,7 @@
   var TOKEN_KEY = "xj_xiata_satoken";
 
   // 完整会话数据接收地址
-  var UPDATE_URL = "http://192.168.1.35:3636/update";
+  var UPDATE_URL = "http://192.168.1.35:3636/update/satoken";
 
   // 是否向局域网服务发送完整会话数据
   var SEND_TO_SERVER = true;
